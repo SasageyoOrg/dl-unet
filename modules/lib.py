@@ -6,6 +6,7 @@
 #     - load_data
 #     - split_data
 #     - data_augmentation
+#     - custom callbacks
 #     - train
 #     - cleanup
 #     - get_predictions
@@ -24,7 +25,10 @@ import cv2
 import copy
 import glob
 import json
+import random
+import plots
 
+import tensorflow as tf
 from sklearn.metrics import accuracy_score
 from tensorflow.keras.optimizers import *
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
@@ -33,24 +37,24 @@ from tensorflow.keras import backend as k
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.preprocessing.image import img_to_array
 from tensorflow.keras import backend as K
+from tensorflow.keras.callbacks import *
 
 from itertools import groupby
 from itertools import chain
-
 
 
 # ---------------------------------------------------------------------------- #
 #                                    Methods                                   #
 # ---------------------------------------------------------------------------- #
 
-# ------------------------------------ INIT ---------------------------------- #
+
 def get_dataset_list(mode, path_, imgs_list_path, params, ratio_test, ratio_val, seed, modality):
-  if mode == 0:
-    # RANDOM SPLIT
-    x = split_patients(imgs_list_path, ratio_test, ratio_val, modality)
+  if mode == 1:
+    # SPLIT PATIENTS
+    x = split_patients(imgs_list_path, ratio_test, ratio_val, seed, modality)
     X, Y = load_data_patients(path_, x, params, modality)
   else:
-    # SPLIT PATIENTS
+    # RANDOMÂ SPLIT
     imgs, msks = load_data_random(path_, params)
     X, Y = split_data_random(imgs, msks, ratio_test, ratio_val, seed)
 
@@ -58,6 +62,19 @@ def get_dataset_list(mode, path_, imgs_list_path, params, ratio_test, ratio_val,
   return dataset_list
 
 # --------------------------------- load_data -------------------------------- #
+
+def norm_data(image, mask):
+
+    mea = np.mean(image)
+    ss = np.std(image)
+    image = (image - mea)/ss
+    image = image.astype(np.float32)
+
+    mask = mask / 255.0
+    mask = mask.astype(np.float32)
+    
+    return image, mask
+
 def load_data_random(path_, params):
   dim = (params['x'],params['y'])
 
@@ -68,16 +85,13 @@ def load_data_random(path_, params):
   
   i = 0
   for im in sorted(imgs_list_path):
+
     image = cv2.imread(os.path.join(path_[0],im),0)
     image = cv2.resize(image,dim)
-
-    mea = np.mean(image)
-    ss = np.std(image)
-    image = (image - mea)/ss
-
     mask = cv2.imread(os.path.join(path_[1],im),0)
     mask = cv2.resize(mask,dim)
-    mask = mask / 255
+    
+    image, mask = norm_data(image, mask)
 
     X[i,:,:,0] = image
     Y[i,:,:,0] = mask
@@ -99,18 +113,10 @@ def load_data_patients(path_, splitting, params, modality):
       # Get image------------------------------------
       image = cv2.imread(os.path.join(path_[0],im),0)
       image = cv2.resize(image,dim)
-      # Normalize image
-      mea = np.mean(image)
-      ss  = np.std(image)
-      image = (image - mea)/ss
-      # ---------------------------------------------
-
-      # Get mask-------------------------------------
       mask = cv2.imread(os.path.join(path_[1],im),0)
       mask = cv2.resize(mask,dim)
-      # Normalize mask
-      mask = mask / 255
-      # ---------------------------------------------
+      
+      image, mask = norm_data(image, mask)
 
       imgs[i,:,:,0] = image
       msks[i,:,:,0] = mask
@@ -119,7 +125,7 @@ def load_data_patients(path_, splitting, params, modality):
     Xlist[mode] = imgs
     Ylist[mode] = msks 
     
-    return Xlist, Ylist
+  return Xlist, Ylist
 
 # -------------------------------- split_data -------------------------------- #
 
@@ -144,7 +150,7 @@ def split_data_random(imgs, msks, ratio_test, ratio_val, seed):
 
   return X, Y
 
-def split_patients(path, ratio_test, ratio_val, modality):
+def split_patients(path, ratio_test, ratio_val, seed, modality):
   # clean patient name file: "Pz001-001.bmp" -> "Pz001"
   patient = [x[:-8] for x in path]
   patient.sort()
@@ -158,16 +164,19 @@ def split_patients(path, ratio_test, ratio_val, modality):
   '''
 
   patient = list(dict.fromkeys(patient)) # delete duplicate name patient
+  
+  # shuffle (because YES!)
+  random.Random(seed).shuffle(patient)
 
   x = {}
   # Splitting
   x_train, x['test'] = train_test_split(patient, 
-                                        test_size = 0.20, 
-                                        random_state = 42)
+                                        test_size = (1 - ratio_test), 
+                                        random_state = seed)
   
   x['train'], x['validation'] = train_test_split(x_train, 
-                                                 test_size = 0.10, 
-                                                 random_state = 42)
+                                                 test_size = (1 - ratio_val), 
+                                                 random_state = seed)
   
   x_path = {}
   # Get each path of the image, for each mode
@@ -188,8 +197,21 @@ def subfinder(mylist, pattern):
 def data_augmentation(seed, dataset_list, params):
 # ---------------------------------------------------------------------------- #
   # * Train
-  train_img_datagen  = ImageDataGenerator(rotation_range = 25, fill_mode='constant')
-  train_msk_datagen  = ImageDataGenerator(rotation_range = 25, fill_mode='constant')
+  train_img_datagen  = ImageDataGenerator(rotation_range = 20,
+                                          width_shift_range=0.1,
+                                          #height_shift_range=0.2,
+                                          shear_range=0.1,
+                                          #zoom_range=0.2,
+                                          horizontal_flip=True,
+                                          fill_mode='nearest')
+
+  train_msk_datagen  = ImageDataGenerator(rotation_range = 20,
+                                          width_shift_range=0.1,
+                                          #height_shift_range=0.2,
+                                          shear_range=0.1,
+                                          #zoom_range=0.2,
+                                          horizontal_flip=True,
+                                          fill_mode='nearest')
 
   train_img_datagen.fit(dataset_list[0]['train'], augment=True, seed=seed)
   train_msk_datagen.fit(dataset_list[1]['train'], augment=True, seed=seed)
@@ -200,7 +222,7 @@ def data_augmentation(seed, dataset_list, params):
   train_generator = zip(train_img_generator, train_msk_generator)
 # ---------------------------------------------------------------------------- #
   # * Validation
-  vali_img_datagen = ImageDataGenerator()
+  vali_img_datagen = ImageDataGenerator()                
   vali_msk_datagen = ImageDataGenerator()
 
   vali_img_datagen.fit(dataset_list[0]['validation'], seed=seed)
@@ -217,27 +239,176 @@ def data_augmentation(seed, dataset_list, params):
 # TODO: manage history and model_json_tuned     [V]
 # TODO: auto select best model                  [V]
 
-def train(root, params, model, train_generator, val_generator):
-  model_weights_path = root
-  # model_weights_path = root + 'unet/Model{epoch:03d}-{loss:2f}.hdf5'
+# custom callback
+class VisualizeMultiply(tf.keras.callbacks.Callback): 
+  # constructor
+  def __init__(self, val_data, patience=0):
+      super(VisualizeMultiply, self).__init__()
+      self.val_data = val_data
+  
+  # function at epoch end
+  def on_epoch_end(self, epoch, logs=None):
+    x, y = next(self.val_data)
+    
+    # first val image/mask
+    val_img = x[0,:,:,0]
+    val_msk = y[0,:,:,0]
 
+    # re-shaping
+    val_image = img_to_array(val_img)
+    val_image = val_image.reshape((1, val_image.shape[0], val_image.shape[1], val_image.shape[2]))
+
+    # summarize model layers
+    for count, layer in enumerate(model.layers):
+      # check for multiply layer
+      if 'tf.math.multiply' in layer.name: 
+        layer_outputs = [layer.output for layer in model.layers[:count+2]] 
+        mul_layer_index = count
+
+    # Extracts the outputs
+    # Creates a model that will return these outputs, given the model input
+    activation_model = models.Model(inputs=model.input, outputs=layer_outputs) 
+
+    # multiply
+    activations = activation_model.predict(val_image) 
+    mul_layer = activations[mul_layer_index]
+    mul_img_1 = mul_layer[0,:,:,0]
+
+    # output 1
+    output1_pred = model.predict(val_image) 
+    output1 = output1_pred[0][..., -2]
+
+    # multiply layer
+    mul_img_2 = val_img * output1
+
+    # create figures
+    rows = 1
+    columns = 4
+
+    fig = plt.figure(figsize=(25, 85))
+    fig.add_subplot(rows, columns, 1)
+    plt.imshow(val_img, cmap='gray')
+    plt.axis('off')
+    plt.title("Input Image")
+    fig.add_subplot(rows, columns, 2)
+    plt.imshow(output1, cmap='gray')
+    plt.axis('off')
+    plt.title("Output 1")
+    fig.add_subplot(rows, columns, 3)
+    plt.imshow(mul_img_1, cmap='gray')
+    plt.axis('off')
+    plt.title("Multiply Layer #1")
+    fig.add_subplot(rows, columns, 4)
+    plt.imshow(mul_img_2, cmap='gray')
+    plt.axis('off')
+    plt.title("Multiply Layer #2")
+    plt.show()
+
+# custom callback
+class VisualizePreds(tf.keras.callbacks.Callback): 
+  # constructor
+  def __init__(self, val_data, patience=0):
+      super(VisualizePreds, self).__init__()
+      self.val_data = val_data
+
+  # function at epoch end
+  def on_epoch_end(self, epoch, logs=None):
+    x, y = next(self.val_data)
+    
+    # first val image/mask
+    val_img = x[0,:,:,0]
+    val_msk = y[0,:,:,0]
+
+    # re-shaping
+    val_image = img_to_array(val_img)
+    val_image = val_image.reshape((1, val_image.shape[0], val_image.shape[1], val_image.shape[2]))
+
+    val_mask = img_to_array(val_msk)
+    val_mask = val_mask.reshape((1, val_mask.shape[0], val_mask.shape[1], val_mask.shape[2]))
+    
+    # preds
+    preds = self.model.predict(val_image) 
+    # output 1
+    output1 = preds[0][..., -2]
+    output1[output1 >= th_2] = 1
+    output1[output1 < th_2] = 0
+    # output 2
+    output2 = preds[0][..., -1]
+    output2[output2 >= th_2] = 1
+    output2[output2 < th_2] = 0
+    #difference of 2 images
+    diff = cv2.absdiff(output2, output1)
+
+    # create figures
+    rows = 1
+    columns = 5
+
+    fig = plt.figure(figsize=(25, 85))
+    fig.add_subplot(rows, columns, 1)
+    plt.imshow(val_img, cmap='gray')
+    plt.axis('off')
+    plt.title("Input Image")
+    fig.add_subplot(rows, columns, 2)
+    plt.imshow(output1, cmap='gray')
+    plt.axis('off')
+    plt.title("Output 1")
+    fig.add_subplot(rows, columns, 3)
+    plt.imshow(output2, cmap='gray')
+    plt.axis('off')
+    plt.title("Output 2")
+    fig.add_subplot(rows, columns, 4)
+    plt.imshow(val_msk, cmap='gray')
+    plt.axis('off')
+    plt.title("Ground Truth")
+    fig.add_subplot(rows, columns, 5)
+    plt.imshow(diff, cmap='gray')
+    plt.axis('off')
+    plt.title("Difference")
+    plt.show()
+
+def train(model_weights_path, log_path, params, model, f_loss, f_metric, train_generator, val_generator):
+  #model_weights_path = root
+  
+  model_weights_path = model_weights_path + '/Model.hdf5'
+
+  '''
   checkPoint = ModelCheckpoint(model_weights_path,
                               monitor = 'val_loss',
                               verbose = 1,
                               save_best_only = True,
                               mode = 'min')
   callbacks_list = checkPoint
+  '''
+  
+  tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_path, histogram_freq=1)
+  callbacks_list = [
+                  ModelCheckpoint(model_weights_path, 
+                                  monitor = 'val_loss', 
+                                  verbose = 1, 
+                                  save_best_only = True, 
+                                  mode = 'min'),
+                  ReduceLROnPlateau(monitor='val_loss',
+                                    mode='min', 
+                                    factor=0.1, 
+                                    patience=10,
+                                    verbose=1,),
+                  EarlyStopping(monitor='val_loss', 
+                                patience=50, 
+                                restore_best_weights=False),
+                  #VisualizeMultiply(val_generator),
+                  #VisualizePreds(val_generator)
+                  ]
 
   # for fine tuning purposes
   #model.load_weights(root + '/results/Unetprova/Model008-0.161614.hdf5')
   #model.load_weights("/content/gdrive/My Drive/CVDL/Segmentation/weights2.h5")
 
   model.compile(optimizer = Adam(learning_rate = params["learningRate"]),
-                                  loss = "binary_crossentropy",
-                                  metrics = ['accuracy'])
+                                  loss = f_loss,
+                                  metrics = [f_metric])
 
   steps_per_epoch = np.ceil(params["length_training"]/params["batch_size"])
-
+  validation_steps = np.ceil(params['length_validation']/params["batch_size"])
   # csv_logger = CSVLogger(root + '/unet.csv', append = False, separator = ';')
 
   history = model.fit(train_generator,
@@ -245,7 +416,7 @@ def train(root, params, model, train_generator, val_generator):
                       epochs = params["nEpoches"],
                       validation_data = val_generator,
                       verbose = 1,
-                      validation_steps = (params['length_validation']/params["batch_size"]),
+                      validation_steps = validation_steps,
                       callbacks = [callbacks_list])
 
   #this saves the weights of the last epoch, only!
@@ -273,14 +444,13 @@ def cleanup(root, best_weights):
 # ------------------------------ get_preditcions ----------------------------- #
 
 def get_preditcions(test_image, test_mask, params, model, threshold):
-
+  '''
   mean_ = np.mean(test_image)
   test_image = test_image - mean_
   std = np.std(test_image)
   test_image = test_image/std
-
-  test_mask = test_mask
-
+  '''
+  
   test_image = img_to_array(test_image)
   test_image = test_image.reshape((1, test_image.shape[0],
                                       test_image.shape[1],
@@ -289,7 +459,7 @@ def get_preditcions(test_image, test_mask, params, model, threshold):
 
   # prediction
   prediction = model.predict(test_image)
-  # copia per ridefinire la segmentazione ar di intensità dei valori
+  # copia per ridefinire la segmentazione ar di intensitÃ  dei valori
   pred = copy.copy(prediction[0,:,:,0])
 
   pred[pred >= threshold] = 1
@@ -303,7 +473,26 @@ def get_preditcions(test_image, test_mask, params, model, threshold):
     }
   return test_results
 
-# --------------------------------- acccuracy -------------------------------- #
+# --------------------------------- evaluate -------------------------------- #
+def evaluate(dataset_list, model, params):
+  threshold = 0.5
+  results_df, avg = plots.get_results(dataset_list, params, model, threshold)
+  print(results_df)
+  print(f"Average dice: {results_df.loc[(results_df['dice'] >= 0.60)]['dice'].describe()}")
+  return results_df
+
+def get_bad_pred(results_df):
+  bad_res = results_df.loc[(results_df['dice'] < 0.60)]
+  print(bad_res)
+
+  num = bad_res['dice'].count()
+  den = results_df['dice'].count()
+
+  print(f'Ratio: {num/den}')
+  return bad_res
+
+
+# --------------------------------- accuracy -------------------------------- #
 
 # @ test_mask: the target mask to make the test on
 # @ pred_mask: mask predicted by the model
