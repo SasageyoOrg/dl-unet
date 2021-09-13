@@ -29,7 +29,7 @@ Carpal tunnel syndrome is the compression of median nerve, is a condition that c
 
 In this work, we investigate a few of them, in particular Lightweight Unet and Double Unet, as well as how they behave when applied on our particular problem, that is the localization and segmentation of the median nerve. Last, but not least, we also propose our variant called <b>Double Lightweight Unet (DL-UNet)</b>, that integrates some of the features from the models mentioned above.
 
-Project's paper: <a href="https://github.com/SasageyoOrg/explainable-ai/blob/main/article.pdf">Studio sull'interpretabilità della conoscenza di una Rete Neurale attraverso un Albero Decisionale</a>
+Project's paper: <a href="https://github.com/SasageyoOrg/cvdl-dl-unet/blob/main/dlunet_paper_short.pdf">DL-UNet: A Convolutional Neural Network for Median Nerve Segmentation</a>
 
 ## 🗂 Project Topology <a name="project-topology"></a>
 ```
